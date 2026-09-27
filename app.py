@@ -3,8 +3,16 @@ import re
 import requests
 import yt_dlp
 from flask import Flask, request, Response, jsonify
+from flask_cors import CORS  # Added: needed so browser fetch() calls aren't blocked
 
 app = Flask(__name__)
+
+# Added: allow any origin to call this API, and explicitly expose the two
+# headers the web client reads (Content-Length for progress, Content-Disposition
+# for filename). Without expose_headers, fetch() can enable CORS and still get
+# null back from response.headers.get('Content-Length').
+CORS(app, resources={r"/download": {"origins": "*"}},
+     expose_headers=["Content-Length", "Content-Disposition"])
 
 
 def sanitize_filename(name: str) -> str:
@@ -15,6 +23,7 @@ def sanitize_filename(name: str) -> str:
 @app.route("/download")
 def download_video():
     url = request.args.get("url")
+    res = request.args.get("res")
     if not url:
         return jsonify({"error": "Missing url parameter"}), 400
 
@@ -28,7 +37,9 @@ def download_video():
     # Wrapped in try/except: original code crashed with a raw 500 on age-gated,
     # private, or geo-blocked videos instead of returning a clean error
     try:
-        with yt_dlp.YoutubeDL(ydl_opts) as ydl:
+        with yt_dlp.YoutubeDL(
+            ydl_opts,
+        ) as ydl:
             info = ydl.extract_info(url, download=False)
     except yt_dlp.utils.DownloadError as e:
         return jsonify({"error": str(e)}), 400
@@ -64,7 +75,7 @@ def download_video():
     resp_headers = {
         "Content-Disposition": f"attachment; filename*=UTF-8''{filename}",
     }
-    # Added: forward Content-Length so the Flutter client can show a real % progress bar
+    # Added: forward Content-Length so the client can show a real % progress bar
     content_length = upstream.headers.get("content-length")
     if content_length:
         resp_headers["Content-Length"] = content_length
