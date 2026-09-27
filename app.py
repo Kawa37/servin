@@ -2,6 +2,7 @@ import os
 import re
 import requests
 import yt_dlp
+from urllib.parse import quote  # Added: for RFC 5987 percent-encoding of the filename
 from flask import Flask, request, Response, jsonify
 from flask_cors import CORS  # Added: needed so browser fetch() calls aren't blocked
 
@@ -16,8 +17,14 @@ CORS(app, resources={r"/download": {"origins": "*"}},
 
 
 def sanitize_filename(name: str) -> str:
-    # Strip characters that break Content-Disposition headers / filesystems
-    return re.sub(r'[\\/*?:"<>|]', "_", name)[:150]
+    # Strip characters that break filesystems, then strip control/newline
+    # characters that would make the raw string an invalid HTTP header value
+    # (this is what was crashing on captions used as titles, e.g. some
+    # Facebook posts with no real title, which can contain emoji, line
+    # breaks, and other non-ASCII text).
+    name = re.sub(r'[\\/*?:"<>|]', "_", name)
+    name = re.sub(r"[\r\n\t]", " ", name)
+    return name.strip()[:150]
 
 
 @app.route("/download")
@@ -72,8 +79,17 @@ def download_video():
         finally:
             upstream.close()
 
+    # Added: ASCII-only fallback for clients/proxies that don't understand
+    # filename*=, plus a properly percent-encoded UTF-8 version for everyone
+    # else. Neither of these can contain raw emoji/Unicode in the header
+    # itself -- that's what was causing the "Invalid HTTP Header" 400s.
+    ascii_fallback = filename.encode("ascii", "ignore").decode() or "video.mp4"
+    encoded_filename = quote(filename)
     resp_headers = {
-        "Content-Disposition": f"attachment; filename*=UTF-8''{filename}",
+        "Content-Disposition": (
+            f'attachment; filename="{ascii_fallback}"; '
+            f"filename*=UTF-8''{encoded_filename}"
+        ),
     }
     # Added: forward Content-Length so the client can show a real % progress bar
     content_length = upstream.headers.get("content-length")
