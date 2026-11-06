@@ -1,5 +1,5 @@
 flask
-yt-dlp
+flask-cors
 requests
 gunicorn
-flask-cors
+yt-dlp[default]
